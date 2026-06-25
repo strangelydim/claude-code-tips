@@ -52,6 +52,24 @@ Default stays maximal. These flags narrow blast radius without editing the scrip
 
 Walks `settings.json`, asserts every hook command path resolves on disk, every `mcp__plugin_*` reference in commands has a matching `enabledPlugins` entry, every `bin/` script referenced by a hook exists. Catches "hook referenced but not installed" forever.
 
+## Uninstall
+
+Reverses the plumbing `install.sh` wired into Claude Code — **safely**. Dry-run by default; pass `--apply` to actually change anything.
+
+```bash
+./uninstall.sh                 # DRY-RUN of a full uninstall (shows what would change)
+./uninstall.sh --apply         # full uninstall (every edited file is backed up first)
+./uninstall.sh --caveman --apply   # uninstall ONLY caveman (+ everything related); leave the rest
+./uninstall.sh --list          # list components
+```
+
+Safety model:
+- **Only removes what this repo installed.** Repo files are matched by content hash; settings hook-entries by exact command; the `<!--cct-->` block by its markers. Anything you added or edited (your own hooks, plugins, env keys, files) is **left and reported**. `serena` MCP is never touched; binaries (lean-ctx, Headroom, CBM) are never removed — only the plumbing.
+- **Ambiguous shared items** (plugins, marketplaces, MCP servers, the Headroom proxy) are removed only when the install manifest proves *this repo* added them; otherwise they're left with a manual command. (Installs predating the manifest therefore keep those — by design.)
+- **Idempotent**, backs up every edited file to `<file>.cct.bak.<ts>`, and supports additive component flags (`--caveman`, `--context-mode`, `--cbm`, `--lean-ctx`, `--headroom`, `--hooks`, `--commands`, `--statusline`, `--claude-md`, `--rules`, `--shell`, `--settings`; none = all).
+
+`install.sh` is also an **upgrader**: re-running a newer version writes an install manifest, records what it added, and auto-removes artifacts a previous version deprecated (old `rtk` hook, the legacy `claude()` shell wrapper, the retired handoff hooks). The shared registry lives in [`lib/cct-lib.sh`](./lib/cct-lib.sh).
+
 ## Layout
 
 | Path | Purpose |

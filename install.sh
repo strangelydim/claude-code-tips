@@ -66,6 +66,10 @@ done
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SETTINGS_SOURCE="$REPO_DIR/settings/settings.json"
+export CCT_REPO_DIR="$REPO_DIR"
+# Shared registry/primitives, also used by uninstall.sh.
+# shellcheck source=lib/cct-lib.sh
+. "$REPO_DIR/lib/cct-lib.sh"
 SETTINGS_TMP=""
 
 cleanup_tmp() {
@@ -181,6 +185,11 @@ if [[ -n "$missing" ]]; then
 fi
 
 prepare_settings_source
+
+# Capture a sticky pre-install baseline of ambiguous shared items (plugins,
+# marketplaces, MCP servers, env keys, Headroom daemon) BEFORE we mutate anything,
+# so uninstall.sh can later prove exactly what THIS repo added. No-op once recorded.
+set +e; cct_capture_baseline; set -e
 
 # ── 1. Install / update Headroom ──
 # If Headroom is already installed, `headroom update` self-updates it correctly
@@ -596,6 +605,14 @@ else
   echo "→ Skipping durable Headroom routing (--no-durable-routing)"
   echo "  Manual launch stays available: headroom wrap claude -- <claude args>"
 fi
+
+# ── 9b. Upgrade cleanup (remove artifacts a previous version deprecated) +
+#        record the install manifest so uninstall can be precise. ──
+echo "→ Upgrade cleanup + recording install manifest..."
+set +e
+cct_migrate "$(cct_installed_version)"
+cct_write_manifest
+set -e
 
 # ── 10. Validate ──
 echo "→ Validating installation..."
