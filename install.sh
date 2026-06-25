@@ -9,20 +9,21 @@ Usage:
   ./install.sh [options]
 
 Power-user default:
-  Installs Headroom + RTK, CBM, context-mode, Caveman, hooks, commands,
-  statusline, settings, and the shell wrapper that runs `claude` through
-  Headroom.
+  Installs Headroom + lean-ctx, CBM, context-mode, Caveman, hooks, commands,
+  statusline, settings, and durable Headroom routing so `claude` auto-routes
+  through the proxy (terminal, desktop app, or IDE).
 
 Options:
   --check              Validate repo settings/hooks/commands without installing.
-  --no-shell-wrapper   Install Headroom, but do not modify your shell rc to wrap `claude`.
+  --no-durable-routing Install Headroom, but skip durable proxy routing (wrap
+                       claude manually with `headroom wrap claude`).
   --no-caveman         Skip Caveman plugin install and omit it from merged settings.
   --sonnet             Use `model: sonnet` and `effortLevel: high` instead of Opus/xhigh.
   -h, --help           Show this help.
 
 Examples:
   ./install.sh
-  ./install.sh --no-shell-wrapper
+  ./install.sh --no-durable-routing
   ./install.sh --no-caveman --sonnet
   ./install.sh --check --no-caveman --sonnet
 EOF
@@ -30,7 +31,7 @@ EOF
 
 CHECK_ONLY=0
 INSTALL_CAVEMAN=1
-INSTALL_SHELL_WRAPPER=1
+INSTALL_DURABLE_ROUTING=1
 MODEL_PROFILE="power"
 
 while [[ $# -gt 0 ]]; do
@@ -39,8 +40,8 @@ while [[ $# -gt 0 ]]; do
       CHECK_ONLY=1
       shift
       ;;
-    --no-shell-wrapper)
-      INSTALL_SHELL_WRAPPER=0
+    --no-durable-routing)
+      INSTALL_DURABLE_ROUTING=0
       shift
       ;;
     --no-caveman)
@@ -146,16 +147,16 @@ if [[ "$CHECK_ONLY" -eq 1 ]]; then
 fi
 
 echo "=== Claude Code Token Optimization Stack ==="
-echo "Installing: Headroom + RTK + CBM + context-mode + hooks"
+echo "Installing: Headroom + lean-ctx + CBM + context-mode + hooks"
 if [[ "$INSTALL_CAVEMAN" -eq 1 ]]; then
   echo "Power-user output compression: Caveman enabled"
 else
   echo "Power-user output compression: Caveman skipped (--no-caveman)"
 fi
-if [[ "$INSTALL_SHELL_WRAPPER" -eq 1 ]]; then
-  echo "Shell wrapper: enabled (claude → headroom wrap claude)"
+if [[ "$INSTALL_DURABLE_ROUTING" -eq 1 ]]; then
+  echo "Durable routing: enabled (persistent proxy + claude auto-routes)"
 else
-  echo "Shell wrapper: skipped (--no-shell-wrapper)"
+  echo "Durable routing: skipped (--no-durable-routing)"
 fi
 if [[ "$MODEL_PROFILE" == "sonnet" ]]; then
   echo "Model profile: sonnet/high (--sonnet)"
@@ -182,21 +183,81 @@ fi
 prepare_settings_source
 
 # ── 1. Install Headroom (includes RTK) ──
-# `--user` keeps us off the system Python and dodges PEP 668
-# "externally-managed-environment" errors on Homebrew Python 3.11+ /
-# Debian-flavour distros. Falls back to plain pip if --user is unsupported
-# (e.g. a venv where --user makes no sense).
+# Headroom is best managed by pipx (isolated venv + its own console scripts),
+# NOT `pip install --user`. Plain pip aimed at a bleeding-edge or free-threaded
+# interpreter (e.g. an asdf 3.14t default) fails to build the Rust-based
+# `tokenizers` dep — it has no prebuilt wheel there and there's no Rust to build
+# one. pipx lets us pin a stable CPython that ships wheels. pip is the fallback
+# only when pipx is unavailable.
 echo "→ Installing Headroom..."
-HR_CMD=""
-if command -v pip3 >/dev/null 2>&1; then HR_CMD="pip3"
-elif command -v pip  >/dev/null 2>&1; then HR_CMD="pip"
-fi
-if [[ -n "$HR_CMD" ]]; then
-  "$HR_CMD" install --user "headroom-ai[all]" 2>/dev/null \
-    || "$HR_CMD" install "headroom-ai[all]" 2>/dev/null \
-    || echo "  ⚠ pip install failed. Run manually: $HR_CMD install --user 'headroom-ai[all]'"
+if command -v pipx >/dev/null 2>&1; then
+  if pipx list --short 2>/dev/null | grep -q '^headroom-ai '; then
+    pipx upgrade headroom-ai 2>/dev/null \
+      || echo "  ⚠ pipx upgrade headroom-ai failed — run it manually."
+  else
+    # Pick the first stable (non-free-threaded) CPython 3.11–3.13 with wheels.
+    # Probe absolute Homebrew/usr-local paths too: a version manager (asdf,
+    # pyenv) often shims the bare `python3.13` name to a different interpreter,
+    # masking a perfectly good Homebrew build.
+    HR_PY=""
+    for py in python3.13 python3.12 python3.11 \
+              /opt/homebrew/bin/python3.13 /opt/homebrew/bin/python3.12 /opt/homebrew/bin/python3.11 \
+              /usr/local/bin/python3.13 /usr/local/bin/python3.12 /usr/local/bin/python3.11; do
+      if command -v "$py" >/dev/null 2>&1 \
+         && "$py" -c 'import sys; sys.exit(1 if "free-threading" in sys.version else 0)' 2>/dev/null; then
+        HR_PY="$(command -v "$py")"; break
+      fi
+    done
+    if [[ -n "$HR_PY" ]]; then
+      pipx install --python "$HR_PY" "headroom-ai[all]" 2>/dev/null \
+        || echo "  ⚠ pipx install failed — run: pipx install --python $HR_PY 'headroom-ai[all]'"
+    else
+      pipx install "headroom-ai[all]" 2>/dev/null \
+        || echo "  ⚠ pipx install failed (no stable python3.11–3.13 found). Install one, then: pipx install 'headroom-ai[all]'"
+    fi
+  fi
 else
-  echo "  ⚠ pip / pip3 not found — install Python 3 + pip, then run: pip install --user 'headroom-ai[all]'"
+  # No pipx: fall back to pip, but warn — a free-threaded/bleeding-edge default
+  # python will fail to build tokenizers. pipx is the reliable path.
+  HR_CMD=""
+  if command -v pip3 >/dev/null 2>&1; then HR_CMD="pip3"
+  elif command -v pip  >/dev/null 2>&1; then HR_CMD="pip"
+  fi
+  if [[ -n "$HR_CMD" ]]; then
+    "$HR_CMD" install --user "headroom-ai[all]" 2>/dev/null \
+      || "$HR_CMD" install "headroom-ai[all]" 2>/dev/null \
+      || echo "  ⚠ pip install failed (often a free-threaded python lacking tokenizers wheels). Install pipx: '$HR_CMD install --user pipx', then 'pipx install headroom-ai[all]'."
+  else
+    echo "  ⚠ pip / pip3 not found — install pipx (recommended) or Python 3 + pip, then: pipx install 'headroom-ai[all]'"
+  fi
+fi
+
+# ── 1b. Ensure lean-ctx (the command-rewriting context tool) ──
+# This stack uses lean-ctx for BOTH Headroom's context layer
+# (HEADROOM_CONTEXT_TOOL=lean-ctx, set in the shell wrapper below) and the
+# Claude Code PreToolUse hook (`lean-ctx hook rewrite` in settings.json). rtk is
+# no longer used. Install lean-ctx and verify its `hook` subcommand is present.
+echo "→ Ensuring lean-ctx (command-rewriting context tool)..."
+leanctx_hook_ok() { command -v lean-ctx >/dev/null 2>&1 && lean-ctx hook --help >/dev/null 2>&1; }
+if leanctx_hook_ok; then
+  echo "  ✓ lean-ctx present ($(lean-ctx --version 2>/dev/null | head -1))"
+else
+  if command -v brew >/dev/null 2>&1; then
+    # Homebrew gates third-party taps; trust just this formula, not the whole tap.
+    brew tap yvgude/lean-ctx 2>/dev/null || true
+    brew trust --formula yvgude/lean-ctx/lean-ctx 2>/dev/null || true
+    { brew list lean-ctx >/dev/null 2>&1 && brew upgrade lean-ctx 2>/dev/null; } \
+      || brew install lean-ctx 2>/dev/null || true
+  elif command -v npm >/dev/null 2>&1; then
+    npm install -g lean-ctx-bin 2>/dev/null || true
+  fi
+  hash -r 2>/dev/null || true
+  if leanctx_hook_ok; then
+    echo "  ✓ lean-ctx installed ($(lean-ctx --version 2>/dev/null | head -1))"
+  else
+    echo "  ⚠ lean-ctx not on PATH. Install it (https://github.com/yvgude/lean-ctx) —"
+    echo "    e.g. 'brew install lean-ctx' or 'npm install -g lean-ctx-bin' — then re-run."
+  fi
 fi
 
 # ── 2. Install codebase-memory-mcp ──
@@ -474,82 +535,57 @@ inject_claude_md
 echo "→ Merging settings.json..."
 merge_settings_json
 
-# ── 9. Shell wrapper for headroom ──
-SHELL_INSTALLED=""
-if [[ "$INSTALL_SHELL_WRAPPER" -eq 1 ]]; then
-  echo "→ Adding shell wrapper for headroom..."
+# ── 9. Durable Headroom routing (launch-independent) ──
+# A shell-function wrapper only routes terminal launches and misses the desktop
+# app / IDE. Durable routing instead runs a persistent proxy daemon and writes
+# provider routing into Claude Code's settings, so `claude` routes through
+# Headroom no matter how it is launched. We still ensure ~/.local/bin is on PATH
+# (CBM + Headroom binaries live there) but install NO claude() function.
+DURABLE_INSTALLED=""
+if [[ "$INSTALL_DURABLE_ROUTING" -eq 1 ]]; then
+  echo "→ Setting up durable Headroom routing..."
 
-  # Detect user's actual shell (login shell or $SHELL) and install ONLY for that
-  # one. Idempotent: re-running won't re-append. Creates the rc file if missing —
-  # a fresh-macOS user with no ~/.zshrc still gets the wrapper.
+  # Ensure ~/.local/bin is on PATH in the user's rc (idempotent, no wrapper fn).
   USER_SHELL="$(basename "${SHELL:-/bin/zsh}")"
   case "$USER_SHELL" in
     fish)
-      rc="$HOME/.config/fish/config.fish"
-      mkdir -p "$(dirname "$rc")"; touch "$rc"
-      if grep -q 'command headroom wrap claude \$argv' "$rc" 2>/dev/null; then
-        perl -0pi -e 's/command headroom wrap claude \$argv/command headroom wrap claude -- \$argv/g' "$rc"
-      fi
-      if ! grep -q 'headroom wrap claude' "$rc" 2>/dev/null; then
-        cat >> "$rc" << 'FISHEOF'
-
+      rc="$HOME/.config/fish/config.fish"; mkdir -p "$(dirname "$rc")"; touch "$rc"
+      grep -q '.local/bin' "$rc" 2>/dev/null || printf '
 # CBM + Headroom binaries live in ~/.local/bin
 if not contains $HOME/.local/bin $PATH
     set -gx PATH $HOME/.local/bin $PATH
 end
-
-# Headroom wraps Claude Code for API-layer token compression
-function claude
-    command headroom wrap claude -- $argv
-end
-FISHEOF
-      fi
-      SHELL_INSTALLED="fish ($rc)"
-      ;;
-    zsh)
-      rc="$HOME/.zshrc"
-      touch "$rc"
-      if grep -q 'command headroom wrap claude "\$@"' "$rc" 2>/dev/null; then
-        perl -0pi -e 's/command headroom wrap claude "\$@"/command headroom wrap claude -- "\$@"/g' "$rc"
-      fi
-      if ! grep -q 'headroom wrap claude' "$rc" 2>/dev/null; then
-        cat >> "$rc" << 'ZSHEOF'
-
-# CBM + Headroom binaries live in ~/.local/bin
-case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) export PATH="$HOME/.local/bin:$PATH";; esac
-
-# Headroom wraps Claude Code for API-layer token compression
-claude() { command headroom wrap claude -- "$@"; }
-ZSHEOF
-      fi
-      SHELL_INSTALLED="zsh ($rc)"
+' >> "$rc"
       ;;
     bash)
-      rc="$HOME/.bashrc"
-      touch "$rc"
-      if grep -q 'command headroom wrap claude "\$@"' "$rc" 2>/dev/null; then
-        perl -0pi -e 's/command headroom wrap claude "\$@"/command headroom wrap claude -- "\$@"/g' "$rc"
-      fi
-      if ! grep -q 'headroom wrap claude' "$rc" 2>/dev/null; then
-        cat >> "$rc" << 'BASHEOF'
-
+      rc="$HOME/.bashrc"; touch "$rc"
+      grep -q '.local/bin' "$rc" 2>/dev/null || printf '
 # CBM + Headroom binaries live in ~/.local/bin
 case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) export PATH="$HOME/.local/bin:$PATH";; esac
-
-# Headroom wraps Claude Code for API-layer token compression
-claude() { command headroom wrap claude -- "$@"; }
-BASHEOF
-      fi
-      SHELL_INSTALLED="bash ($rc)"
+' >> "$rc"
       ;;
     *)
-      echo "  ⚠ Unrecognised shell '$USER_SHELL'. Add this to your shell rc manually:"
-      echo "      claude() { command headroom wrap claude -- \"\$@\"; }"
+      rc="$HOME/.zshrc"; touch "$rc"
+      grep -q '.local/bin' "$rc" 2>/dev/null || printf '
+# CBM + Headroom binaries live in ~/.local/bin
+case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) export PATH="$HOME/.local/bin:$PATH";; esac
+' >> "$rc"
       ;;
   esac
-  [[ -n "$SHELL_INSTALLED" ]] && echo "  ✓ Shell wrapper installed: $SHELL_INSTALLED"
+
+  if command -v headroom >/dev/null 2>&1; then
+    headroom install apply 2>/dev/null \
+      || echo "  ⚠ 'headroom install apply' failed — run it manually."
+    headroom init --global claude 2>/dev/null \
+      || echo "  ⚠ 'headroom init --global claude' failed — run it manually."
+    DURABLE_INSTALLED="persistent proxy + claude routing (settings.json)"
+    echo "  ✓ Durable routing configured (restart Claude Code to activate)"
+  else
+    echo "  ⚠ 'headroom' not on PATH — skipped durable routing. After Headroom is"
+    echo "    installed, run: headroom install apply && headroom init --global claude"
+  fi
 else
-  echo "→ Skipping shell wrapper for headroom (--no-shell-wrapper)"
+  echo "→ Skipping durable Headroom routing (--no-durable-routing)"
   echo "  Manual launch stays available: headroom wrap claude -- <claude args>"
 fi
 
@@ -584,16 +620,16 @@ if [[ "$MODEL_PROFILE" == "sonnet" ]]; then
 else
   echo "  ✓ Optimized settings.json (opus/xhigh power profile)"
 fi
-if [[ -n "$SHELL_INSTALLED" ]]; then
-  echo "  ✓ Shell wrapper: $SHELL_INSTALLED"
+if [[ -n "$DURABLE_INSTALLED" ]]; then
+  echo "  ✓ Durable routing: $DURABLE_INSTALLED"
 else
-  echo "  - Shell wrapper skipped; run manually with: headroom wrap claude -- <claude args>"
+  echo "  - Durable routing skipped; run manually with: headroom wrap claude -- <claude args>"
 fi
 echo ""
 echo "Next steps:"
-echo "  1. Restart your shell: exec \$SHELL"
-if [[ "$INSTALL_SHELL_WRAPPER" -eq 1 ]]; then
-  echo "  2. Run 'claude' — it now auto-wraps through Headroom"
+echo "  1. Restart Claude Code (and your shell) to activate routing: exec \$SHELL"
+if [[ "$INSTALL_DURABLE_ROUTING" -eq 1 ]]; then
+  echo "  2. Run 'claude' (any launcher) — it now routes through Headroom automatically"
 else
   echo "  2. Run 'headroom wrap claude -- <claude args>' when you want API-layer compression"
 fi
