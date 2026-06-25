@@ -1,6 +1,6 @@
 #!/bin/bash
 # PreToolUse Bash gate: block cat/head/tail/find/grep/rg/wc/bare-ls invocations.
-# Global CLAUDE.md bans these in favour of Read/Grep/Glob/rtk. RTK wrappers pass.
+# Global CLAUDE.md bans these in favour of Read/Grep/Glob/lean-ctx. lean-ctx wrappers pass.
 # Escape hatch: touch /tmp/bash-raw-unlock-$PPID.
 set -uo pipefail
 # NOTE: deliberately NOT using `set -e`. Malformed JSON on stdin would make jq
@@ -33,14 +33,14 @@ CMD=$(echo "$INPUT" | jq -r '.tool_input.command // ""' 2>/dev/null || echo "")
 # Strip leading env/timeout/nice wrappers.
 TRIMMED=$(echo "$CMD" | sed -E 's/^[[:space:]]*//')
 
-# Match only first token (command head, unwrapped). Allow `rtk <tool>` wrappers.
+# Match only first token (command head, unwrapped). Allow `lean-ctx` wrappers.
 FIRST=$(echo "$TRIMMED" | awk '{print $1}')
 
 banned=0
 case "$FIRST" in
   cat|head|tail|find|grep|rg|wc) banned=1 ;;
-  rtk)
-    # rtk wraps git/cargo/pytest/docker/etc — pass through.
+  lean-ctx|*/lean-ctx)
+    # lean-ctx wraps commands (`lean-ctx -c '<cmd>'`, `lean-ctx grep`, etc.) — pass through.
     exit 0
     ;;
 esac
@@ -79,7 +79,7 @@ case "$FIRST" in
     echo "BLOCKED Bash '$FIRST'. Use the Grep tool (pattern, glob, output_mode). Override: touch $UNLOCK." >&2
     ;;
   wc)
-    echo "BLOCKED Bash 'wc'. If you need line count, Read the file (line count is visible) or pipe via 'rtk wc'. Override: touch $UNLOCK." >&2
+    echo "BLOCKED Bash 'wc'. If you need line count, Read the file (line count is visible) or compress it through lean-ctx. Override: touch $UNLOCK." >&2
     ;;
 esac
 exit 2

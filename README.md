@@ -1,34 +1,41 @@
 # Claude Code Token-Optimisation Stack
 
+> **Fork note.** This is a fork of [sgaabdu4/claude-code-tips](https://github.com/sgaabdu4/claude-code-tips) with a few different defaults:
+> - Uses **[lean-ctx](https://github.com/yvgude/lean-ctx)** instead of RTK for CLI compression — both as Headroom's context tool and as the command-rewriting PreToolUse hook.
+> - Sets up **durable Headroom routing** (a persistent proxy + provider routing in `settings.json`) instead of a shell-function wrapper, so `claude` routes through the proxy no matter how it's launched (terminal, desktop app, IDE).
+> - Does **not** use Caveman — install with `./install.sh --no-caveman`.
+>
+> The long-form post in [`claude-code-tips.md`](./claude-code-tips.md) still describes the original RTK-based stack.
+
 Configs + hooks + scripts for Medium post: **"How I Cut Claude Code Token Usage by 90%+"**.
 
-This repo is intentionally a **power-user default**: it assumes you want aggressive token control, enforcement hooks, and a local shell wrapper. If you want the full stack, run the default installer. If you want less global surface area, use the opt-out flags below.
+This repo is intentionally a **power-user default**: it assumes you want aggressive token control, enforcement hooks, and durable Headroom routing. If you want the full stack, run the default installer. If you want less global surface area, use the opt-out flags below.
 
 Post: [`claude-code-tips.md`](./claude-code-tips.md)
 
-Stack: **CBM** (code graph) + **context-mode** (output sandbox) + **RTK** (shell compression) + **Headroom** (API-layer) + **Caveman** (Claude output) + enforcement hooks. ~30min → 3h+ sessions, same 200K window.
+Stack: **CBM** (code graph) + **context-mode** (output sandbox) + **lean-ctx** (shell compression) + **Headroom** (API-layer) + **Caveman** (Claude output) + enforcement hooks. ~30min → 3h+ sessions, same 200K window.
 
 ## Install
 
 ```bash
-git clone https://github.com/sgaabdu4/claude-code-tips.git
-cd claude-code-tips && chmod +x install.sh && ./install.sh
+git clone https://github.com/strangelydim/claude-code-tips.git
+cd claude-code-tips && chmod +x install.sh && ./install.sh --no-caveman
 ```
 
-Sanity-checks `git`/`curl`/`jq`/`python3` upfront. Installs Headroom (`pip install --user`), CBM binary, context-mode + Caveman plugins via `claude plugin install`, hooks, slash commands, statusline, settings, shell wrapper for your `$SHELL`. **Idempotent** — re-run anytime.
+Sanity-checks `git`/`curl`/`jq`/`python3` upfront. Installs (or updates, via `headroom update`) Headroom, plus lean-ctx, the CBM binary, context-mode (and Caveman unless `--no-caveman`) plugins via `claude plugin install`, hooks, slash commands, statusline, settings, and durable Headroom routing (persistent proxy + provider routing). **Idempotent** — re-run anytime.
 
 ### Power-user flags
 
 Default stays maximal. These flags narrow blast radius without editing the script:
 
 ```bash
-./install.sh --no-shell-wrapper   # install Headroom/RTK, but do not alias claude
+./install.sh --no-durable-routing # install Headroom, but don't wire durable proxy routing
 ./install.sh --no-caveman         # skip Caveman plugin + omit it from settings
 ./install.sh --sonnet             # use model: sonnet + effortLevel: high
 ./install.sh --check              # validate repo wiring only
 ```
 
-`--no-shell-wrapper` is the safer alternative to skipping Headroom entirely: this stack relies on Headroom to provide RTK, so the flag keeps the binary installed while making API-layer compression an explicit `headroom wrap claude -- <claude args>` launch choice.
+`--no-durable-routing` is the safer alternative to skipping Headroom entirely: it keeps Headroom (and lean-ctx) installed but leaves API-layer compression as an explicit `headroom wrap claude -- <claude args>` launch choice instead of wiring durable proxy routing into your config.
 
 ### Existing setup? Don't worry
 
@@ -49,7 +56,7 @@ Walks `settings.json`, asserts every hook command path resolves on disk, every `
 
 | Path | Purpose |
 |---|---|
-| [`install.sh`](./install.sh) | One-click power-user install. Supports `--check`, `--no-shell-wrapper`, `--no-caveman`, and `--sonnet`. |
+| [`install.sh`](./install.sh) | One-click power-user install. Supports `--check`, `--no-durable-routing`, `--no-caveman`, and `--sonnet`. |
 | [`settings/settings.json`](./settings/settings.json) | `~/.claude/settings.json` — model, effort, hooks, env, plugins, statusline |
 | [`CLAUDE.md.example`](./CLAUDE.md.example) | Body of `~/.claude/CLAUDE.md` — rules + tool routing. Wrapped in `<!--cct-->` markers when installed |
 | [`hooks/`](./hooks/) | All enforcement hooks (cbm-*, bash-ban-raw-tools, sync-*-on-edit, flutter-ctx-redirect, memory-repo-symlink) |
@@ -63,8 +70,8 @@ Subagent definitions are private by design. The commands can call local agents f
 ## Hook map
 
 ```
-shell wrapper           claude → headroom wrap claude
-PreToolUse(Bash)        context-mode + bash-ban-raw-tools + flutter-ctx-redirect + rtk
+durable routing         claude → Headroom proxy (ANTHROPIC_BASE_URL in settings.json)
+PreToolUse(Bash)        context-mode + bash-ban-raw-tools + flutter-ctx-redirect + lean-ctx
 PreToolUse(Grep|...)    cbm-code-discovery-gate
 PostToolUse             context-mode + cbm-mcp-marker
 PostToolUse(Edit|Write) sync-copilot-on-edit + sync-runner-tools-on-edit
@@ -76,11 +83,11 @@ SessionStart            context-mode + memory-repo-symlink + cbm-session-reminde
 
 | Tool | Repo |
 |---|---|
-| Headroom (bundles RTK) | https://github.com/chopratejas/headroom |
+| Headroom (API-layer proxy) | https://github.com/chopratejas/headroom |
 | codebase-memory-mcp | https://github.com/DeusData/codebase-memory-mcp |
 | context-mode plugin | https://github.com/mksglu/context-mode |
 | Caveman plugin | https://github.com/JuliusBrussee/caveman |
-| RTK standalone | https://github.com/rtk-ai/rtk |
+| lean-ctx (CLI compression) | https://github.com/yvgude/lean-ctx |
 
 ### Optional — required only for `/e2e` and `/e2e-auto`
 

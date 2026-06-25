@@ -124,30 +124,27 @@ One-time: `cbm config set auto_index true` (MCP session auto-index dead when tra
 
 Flow: MCP → fail-transport → CLI in `ctx_execute(shell)` → fail → surface error → grep last.
 
-# RTK - Rust Token Killer
+# lean-ctx — Context Runtime for CLI output
 
-**Usage**: Token-optimized CLI proxy (60-90% savings on dev ops)
+**Usage**: Token-optimized CLI context tool (compresses command output in place)
 
-## Meta Commands (always use rtk directly)
+## Meta Commands (run lean-ctx directly)
 
 ```bash
-rtk gain              # Show token savings analytics
-rtk gain --history    # Show command usage history with savings
-rtk discover          # Analyze Claude Code history for missed opportunities
-rtk proxy <cmd>       # Execute raw command without filtering (for debugging)
+lean-ctx gain         # Show token savings analytics
+lean-ctx status       # Quick connection / config check
+lean-ctx doctor       # Verify everything is wired up correctly
 ```
 
 ## Installation Verification
 
 ```bash
-rtk --version         # Should show: rtk X.Y.Z
-rtk gain              # Should work (not "command not found")
-which rtk             # Verify correct binary
+lean-ctx --version    # Should show: lean-ctx X.Y.Z
+lean-ctx status       # Should work (not "command not found")
+which lean-ctx        # Verify correct binary
 ```
-
-⚠️ **Name collision**: `rtk gain` fail → maybe reachingforthejack/rtk (Rust Type Kit) installed.
 
 ## Hook-Based Usage
 
-Other commands auto-rewritten by Claude Code hook.
-Example: `git status` → `rtk git status` (transparent, 0 tokens overhead)
+Other commands auto-rewritten by the Claude Code PreToolUse hook (`lean-ctx hook rewrite`).
+Example: `git status` → `lean-ctx -c 'git status'` (transparent, 0 tokens overhead)

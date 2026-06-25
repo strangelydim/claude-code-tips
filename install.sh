@@ -182,39 +182,39 @@ fi
 
 prepare_settings_source
 
-# ── 1. Install Headroom (includes RTK) ──
-# Headroom is best managed by pipx (isolated venv + its own console scripts),
-# NOT `pip install --user`. Plain pip aimed at a bleeding-edge or free-threaded
-# interpreter (e.g. an asdf 3.14t default) fails to build the Rust-based
-# `tokenizers` dep — it has no prebuilt wheel there and there's no Rust to build
-# one. pipx lets us pin a stable CPython that ships wheels. pip is the fallback
-# only when pipx is unavailable.
-echo "→ Installing Headroom..."
-if command -v pipx >/dev/null 2>&1; then
-  if pipx list --short 2>/dev/null | grep -q '^headroom-ai '; then
-    pipx upgrade headroom-ai 2>/dev/null \
-      || echo "  ⚠ pipx upgrade headroom-ai failed — run it manually."
-  else
-    # Pick the first stable (non-free-threaded) CPython 3.11–3.13 with wheels.
-    # Probe absolute Homebrew/usr-local paths too: a version manager (asdf,
-    # pyenv) often shims the bare `python3.13` name to a different interpreter,
-    # masking a perfectly good Homebrew build.
-    HR_PY=""
-    for py in python3.13 python3.12 python3.11 \
-              /opt/homebrew/bin/python3.13 /opt/homebrew/bin/python3.12 /opt/homebrew/bin/python3.11 \
-              /usr/local/bin/python3.13 /usr/local/bin/python3.12 /usr/local/bin/python3.11; do
-      if command -v "$py" >/dev/null 2>&1 \
-         && "$py" -c 'import sys; sys.exit(1 if "free-threading" in sys.version else 0)' 2>/dev/null; then
-        HR_PY="$(command -v "$py")"; break
-      fi
-    done
-    if [[ -n "$HR_PY" ]]; then
-      pipx install --python "$HR_PY" "headroom-ai[all]" 2>/dev/null \
-        || echo "  ⚠ pipx install failed — run: pipx install --python $HR_PY 'headroom-ai[all]'"
-    else
-      pipx install "headroom-ai[all]" 2>/dev/null \
-        || echo "  ⚠ pipx install failed (no stable python3.11–3.13 found). Install one, then: pipx install 'headroom-ai[all]'"
+# ── 1. Install / update Headroom ──
+# If Headroom is already installed, `headroom update` self-updates it correctly
+# regardless of how it was installed. For a FRESH install we prefer pipx
+# (isolated venv + its own console scripts) over `pip install --user`: plain pip
+# aimed at a bleeding-edge or free-threaded interpreter (e.g. an asdf 3.14t
+# default) fails to build the Rust-based `tokenizers` dep — no prebuilt wheel
+# there and no Rust to build one. pipx pins a stable CPython that ships wheels;
+# pip is the fallback only when pipx is unavailable.
+echo "→ Installing / updating Headroom..."
+if command -v headroom >/dev/null 2>&1; then
+  # Headroom self-updates correctly however it was installed.
+  headroom update 2>/dev/null \
+    || echo "  ⚠ 'headroom update' failed — run it manually."
+elif command -v pipx >/dev/null 2>&1; then
+  # Fresh pipx install on the first stable (non-free-threaded) CPython 3.11–3.13
+  # with wheels. Probe absolute Homebrew/usr-local paths too: a version manager
+  # (asdf, pyenv) often shims the bare `python3.13` name to a different
+  # interpreter, masking a perfectly good Homebrew build.
+  HR_PY=""
+  for py in python3.13 python3.12 python3.11 \
+            /opt/homebrew/bin/python3.13 /opt/homebrew/bin/python3.12 /opt/homebrew/bin/python3.11 \
+            /usr/local/bin/python3.13 /usr/local/bin/python3.12 /usr/local/bin/python3.11; do
+    if command -v "$py" >/dev/null 2>&1 \
+       && "$py" -c 'import sys; sys.exit(1 if "free-threading" in sys.version else 0)' 2>/dev/null; then
+      HR_PY="$(command -v "$py")"; break
     fi
+  done
+  if [[ -n "$HR_PY" ]]; then
+    pipx install --python "$HR_PY" "headroom-ai[all]" 2>/dev/null \
+      || echo "  ⚠ pipx install failed — run: pipx install --python $HR_PY 'headroom-ai[all]'"
+  else
+    pipx install "headroom-ai[all]" 2>/dev/null \
+      || echo "  ⚠ pipx install failed (no stable python3.11–3.13 found). Install one, then: pipx install 'headroom-ai[all]'"
   fi
 else
   # No pipx: fall back to pip, but warn — a free-threaded/bleeding-edge default
@@ -234,11 +234,13 @@ fi
 
 # ── 1b. Ensure lean-ctx (the command-rewriting context tool) ──
 # This stack uses lean-ctx for BOTH Headroom's context layer
-# (HEADROOM_CONTEXT_TOOL=lean-ctx, set in the shell wrapper below) and the
-# Claude Code PreToolUse hook (`lean-ctx hook rewrite` in settings.json). rtk is
-# no longer used. Install lean-ctx and verify its `hook` subcommand is present.
+# (HEADROOM_CONTEXT_TOOL=lean-ctx) and for the Claude Code PreToolUse hook
+# (`lean-ctx hook rewrite` in settings.json). Install lean-ctx and verify it runs
+# (its `hook rewrite` entrypoint ships with lean-ctx 3.x).
 echo "→ Ensuring lean-ctx (command-rewriting context tool)..."
-leanctx_hook_ok() { command -v lean-ctx >/dev/null 2>&1 && lean-ctx hook --help >/dev/null 2>&1; }
+# `lean-ctx hook --help` exits nonzero (it's a subcommand group), so probe with
+# `--version` — exit 0 confirms lean-ctx is installed and runnable.
+leanctx_hook_ok() { command -v lean-ctx >/dev/null 2>&1 && lean-ctx --version >/dev/null 2>&1; }
 if leanctx_hook_ok; then
   echo "  ✓ lean-ctx present ($(lean-ctx --version 2>/dev/null | head -1))"
 else
@@ -435,7 +437,8 @@ inject_claude_md() {
 }
 
 # merge_settings_json: deep jq merge. Preserves user model/effortLevel/
-# permissions/custom env by default. Replaces hooks structure (we own it).
+# permissions/custom env by default. Replaces the hooks block (we own it) but
+# keeps headroom-init's self-healing `ensure` hooks, so re-runs stay idempotent.
 # Unions enabledPlugins + extraKnownMarketplaces, with explicit CLI flags allowed
 # to remove Caveman or force the sonnet/high model profile.
 # Falls back to plain copy if jq fails.
@@ -465,7 +468,12 @@ merge_settings_json() {
   if jq -s --argjson skipCaveman "$skip_caveman" --arg modelProfile "$MODEL_PROFILE" '
     .[0] as $ours | .[1] as $theirs |
     ($ours * $theirs)
-    | .hooks = $ours.hooks
+    | .hooks = (
+        ($ours.hooks // {}) as $oh | ($theirs.hooks // {}) as $th |
+        reduce ($th | keys_unsorted[]) as $k ($oh;
+          .[$k] = ((.[$k] // []) + [ $th[$k][] | select(any(.hooks[]?.command // empty; test("headroom init hook ensure"))) ])
+        )
+      )
     | .env = (($theirs.env // {}) * ($ours.env // {}))
     | .enabledPlugins = (($theirs.enabledPlugins // {}) * ($ours.enabledPlugins // {}))
     | .extraKnownMarketplaces = (($theirs.extraKnownMarketplaces // {}) * ($ours.extraKnownMarketplaces // {}))
@@ -601,7 +609,7 @@ echo ""
 echo "=== Installation Complete ==="
 echo ""
 echo "What was installed:"
-echo "  ✓ Headroom (API-layer compression, bundles RTK)"
+echo "  ✓ Headroom (API-layer compression)"
 echo "  ✓ codebase-memory-mcp (knowledge graph for code)"
 echo "  ✓ context-mode plugin (output virtualization)"
 if [[ "$INSTALL_CAVEMAN" -eq 1 ]]; then
@@ -646,4 +654,4 @@ echo "  Headroom:  https://github.com/chopratejas/headroom"
 echo "  CBM:       https://github.com/DeusData/codebase-memory-mcp"
 echo "  ctx-mode:  https://github.com/mksglu/context-mode"
 echo "  Caveman:   https://github.com/JuliusBrussee/caveman"
-echo "  RTK:       https://github.com/rtk-ai/rtk (bundled in Headroom)"
+echo "  lean-ctx:  https://github.com/yvgude/lean-ctx"
