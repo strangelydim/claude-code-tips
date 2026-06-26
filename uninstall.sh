@@ -31,7 +31,9 @@ Component flags (additive — pick any; none = all):
 $(for c in "${CCT_COMPONENTS[@]}"; do printf '  --%-13s %s\n' "$c" "$(cct_component_desc "$c")"; done)
 
 Notes:
-  * Binaries (lean-ctx, Headroom, CBM, jq, tvly) are never removed — only plumbing.
+  * Binaries (lean-ctx, CBM, jq, tvly) are never removed — only plumbing.
+  * The Headroom proxy container is removed (if this repo created it), but its
+    'headroom-workspace' Docker volume (savings/stats data) is always kept.
   * serena MCP is never touched (user-managed).
   * Override target dir for testing with CCT_CLAUDE_DIR / CCT_CLAUDE_JSON.
 EOF

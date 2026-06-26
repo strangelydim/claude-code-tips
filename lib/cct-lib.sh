@@ -10,16 +10,23 @@
 #     blocks, repo-specific deprecated file hashes — are removed directly; their
 #     content proves we own them.
 #   * AMBIGUOUS shared items — enabled plugins, marketplaces, MCP-server
-#     registrations, the persistent Headroom proxy + its routing env — are
+#     registrations, the Headroom proxy container + its routing env — are
 #     removed ONLY when the install manifest proves THIS repo added them. With no
 #     manifest, they are LEFT and reported with a manual command, never guessed.
 #   * `serena` MCP is NEVER touched (user-managed). Binaries are never removed.
 #   * Every settings/CLAUDE.md/rc edit is backed up first; all ops are idempotent
 #     and honor CCT_DRY_RUN.
 
-CCT_SCHEMA_VERSION=2
-CCT_HEADROOM_HOOK_CMD_SIG="headroom init hook ensure"   # Headroom ensure-hook (gated with the daemon)
+CCT_SCHEMA_VERSION=3
+CCT_HEADROOM_HOOK_CMD_SIG="headroom init hook ensure"   # legacy host ensure-hook (pre-v3); stripped on migrate
 CCT_MCP_NEVER=(serena)   # user-managed MCP servers we never remove
+
+# Headroom now runs as a Docker container (no host Python). install.sh and the
+# daemon remover share these names so ownership/teardown stay in lockstep.
+CCT_HEADROOM_IMAGE="${CCT_HEADROOM_IMAGE:-ghcr.io/chopratejas/headroom:latest}"
+CCT_HEADROOM_CONTAINER="${CCT_HEADROOM_CONTAINER:-headroom-proxy}"
+CCT_HEADROOM_PORT="${CCT_HEADROOM_PORT:-8787}"
+CCT_HEADROOM_VOLUME="${CCT_HEADROOM_VOLUME:-headroom-workspace}"
 
 # Paths (overridable for fixture testing) ------------------------------------
 CCT_CLAUDE_DIR="${CCT_CLAUDE_DIR:-$HOME/.claude}"
@@ -39,7 +46,7 @@ cct_component_desc() {
     context-mode) echo "context-mode plugin + marketplace + MCP + its settings hooks" ;;
     cbm)          echo "codebase-memory MCP + cbm-* hooks + settings entries" ;;
     lean-ctx)     echo "lean-ctx hook-rewrite settings entry (+ deprecated rtk leftovers)" ;;
-    headroom)     echo "durable routing: daemon + env + plugin/marketplace/MCP + ensure-hooks" ;;
+    headroom)     echo "durable routing: Docker proxy container + routing env + remote MCP (+legacy daemon/ensure-hooks)" ;;
     hooks)        echo "enforcement hooks: bash-ban, flutter-ctx, memory-symlink, sync-* (+bin)" ;;
     commands)     echo "slash commands: e2e, e2e-auto, unleash, ship (+deprecated handoff)" ;;
     statusline)   echo "statusline-command.sh + settings.statusLine" ;;
@@ -162,12 +169,15 @@ cct_remove_setting_key() {  # <top-level key> (gated)
   _cct_jq_inplace "$CCT_SETTINGS" 'del(.[$k])' --arg k "$1" && _cct_removed "settings.$1"
 }
 
-# Headroom persistent daemon (gated) ------------------------------------------
+# Headroom proxy container (gated) --------------------------------------------
+# The proxy is a Docker container install.sh created. We force-remove the
+# container but deliberately LEAVE its named volume ($CCT_HEADROOM_VOLUME) —
+# that holds savings/stats data, which a binary/data item we never delete.
 cct_remove_headroom_daemon() {
-  cct_manifest_owns_daemon || { _cct_left "Headroom persistent proxy (manual: headroom install remove)"; return 0; }
-  if [ "$CCT_DRY_RUN" = 1 ]; then _cct_removed "Headroom persistent proxy (headroom install remove)"; return 0; fi
-  command -v headroom >/dev/null 2>&1 && headroom install remove >/dev/null 2>&1 || true
-  _cct_removed "Headroom persistent proxy"
+  cct_manifest_owns_daemon || { _cct_left "Headroom proxy container (manual: docker rm -f $CCT_HEADROOM_CONTAINER)"; return 0; }
+  if [ "$CCT_DRY_RUN" = 1 ]; then _cct_removed "Headroom proxy container (docker rm -f $CCT_HEADROOM_CONTAINER; volume $CCT_HEADROOM_VOLUME kept)"; return 0; fi
+  command -v docker >/dev/null 2>&1 && docker rm -f "$CCT_HEADROOM_CONTAINER" >/dev/null 2>&1 || true
+  _cct_removed "Headroom proxy container (volume $CCT_HEADROOM_VOLUME kept)"
 }
 
 # rc-file line/block removal --------------------------------------------------
@@ -248,7 +258,7 @@ cct_comp_rules() { cct_remove_repo_file "$CCT_CLAUDE_DIR/rules/README.md" "rules
 cct_comp_shell() {
   local rc; for rc in "$HOME/.zshrc" "$HOME/.bashrc" "$HOME/.config/fish/config.fish"; do
     cct_rc_remove "$rc" 'headroom wrap claude' "deprecated claude() wrapper"
-    cct_rc_remove "$rc" 'CBM \+ Headroom binaries live in' "PATH-ensure block"
+    cct_rc_remove "$rc" 'CBM.*binar.*live' "PATH-ensure block"
   done
 }
 cct_comp_settings() {
@@ -297,6 +307,20 @@ cct_installed_version() { if cct_manifest_present; then jq -r '.schema // 0' "$C
 cct_migrate() {  # <from_version>
   local from="${1:-0}"
   [ "$from" -lt 2 ] && _cct_migrate_v2
+  [ "$from" -lt 3 ] && _cct_migrate_v3
+  return 0
+}
+_cct_migrate_v3() {  # v2 -> v3: retire host Headroom (pipx + launchd) for the Docker proxy
+  # A previous version ran a launchd Headroom daemon on port 8787; retire it so
+  # the container's `docker run -p 8787` doesn't collide. This needs the legacy
+  # host CLI — absent on a Docker-only machine, where there's nothing to free.
+  if command -v headroom >/dev/null 2>&1; then
+    if [ "${CCT_DRY_RUN:-0}" = 1 ]; then _cct_removed "legacy host Headroom launchd daemon (headroom install remove)"
+    else headroom install remove >/dev/null 2>&1 || true; _cct_removed "legacy host Headroom launchd daemon (freed port $CCT_HEADROOM_PORT)"; fi
+  fi
+  # The old `headroom init --global claude` injected self-healing ensure-hooks
+  # into settings.json; the Docker proxy needs none, so strip them.
+  cct_acc_sig "$CCT_HEADROOM_HOOK_CMD_SIG"; cct_flush_hooks
   return 0
 }
 _cct_migrate_v2() {  # v1 -> v2: rtk -> lean-ctx, shell wrapper -> durable routing, handoff retired
@@ -313,7 +337,7 @@ _cct_migrate_v2() {  # v1 -> v2: rtk -> lean-ctx, shell wrapper -> durable routi
   return 0
 }
 
-_cct_daemon_running() { command -v headroom >/dev/null 2>&1 && headroom install status 2>/dev/null | grep -qiE 'status:[[:space:]]*running'; }
+_cct_daemon_running() { command -v docker >/dev/null 2>&1 && [ "$(docker inspect -f '{{.State.Running}}' "$CCT_HEADROOM_CONTAINER" 2>/dev/null)" = "true" ]; }
 _cct_jq_or() { local d="$1"; shift; local o; o="$(jq -c "$@" 2>/dev/null)"; [ -n "$o" ] && printf '%s' "$o" || printf '%s' "$d"; }
 
 # Capture a one-time, sticky baseline of pre-existing ambiguous items, taken

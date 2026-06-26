@@ -2,7 +2,7 @@
 
 > **Fork note.** This is a fork of [sgaabdu4/claude-code-tips](https://github.com/sgaabdu4/claude-code-tips) with a few different defaults:
 > - Uses **[lean-ctx](https://github.com/yvgude/lean-ctx)** instead of RTK for CLI compression — both as Headroom's context tool and as the command-rewriting PreToolUse hook.
-> - Sets up **durable Headroom routing** (a persistent proxy + provider routing in `settings.json`) instead of a shell-function wrapper, so `claude` routes through the proxy no matter how it's launched (terminal, desktop app, IDE).
+> - Runs **Headroom as a Docker container** (`ghcr.io/chopratejas/headroom:latest`) — no host Python — and sets up **durable routing** (provider base URL written into `settings.json` + the container's MCP tools registered over HTTP) instead of a shell-function wrapper, so `claude` routes through the proxy no matter how it's launched (terminal, desktop app, IDE).
 > - Does **not** use Caveman — install with `./install.sh --no-caveman`.
 >
 > The long-form post in [`claude-code-tips.md`](./claude-code-tips.md) still describes the original RTK-based stack.
@@ -22,20 +22,22 @@ git clone https://github.com/strangelydim/claude-code-tips.git
 cd claude-code-tips && chmod +x install.sh && ./install.sh --no-caveman
 ```
 
-Sanity-checks `git`/`curl`/`jq`/`python3` upfront. Installs (or updates, via `headroom update`) Headroom, plus lean-ctx, the CBM binary, context-mode (and Caveman unless `--no-caveman`) plugins via `claude plugin install`, hooks, slash commands, statusline, settings, and durable Headroom routing (persistent proxy + provider routing). **Idempotent** — re-run anytime.
+**Prerequisite:** [Docker](https://www.docker.com/products/docker-desktop/) — Headroom runs as a container, so the stack has no host-Python dependency. Make sure Docker Desktop starts at login; the proxy container runs with `--restart unless-stopped`, so the Docker daemon brings it back automatically. If Docker isn't running, install.sh skips Headroom (everything else still installs) and you re-run once Docker is up.
+
+Sanity-checks `git`/`curl`/`jq` upfront. Pulls and runs the Headroom proxy container (`ghcr.io/chopratejas/headroom:latest`, published on `127.0.0.1:8787`, state persisted in a `headroom-workspace` volume), plus lean-ctx, the CBM binary, context-mode (and Caveman unless `--no-caveman`) plugins via `claude plugin install`, hooks, slash commands, statusline, settings, and durable Headroom routing (provider base URL in `settings.json` + the container's compress/retrieve/stats MCP tools registered over HTTP at `/mcp`). **Idempotent** — re-run anytime; an already-current, healthy proxy is left as-is.
 
 ### Power-user flags
 
 Default stays maximal. These flags narrow blast radius without editing the script:
 
 ```bash
-./install.sh --no-durable-routing # install Headroom, but don't wire durable proxy routing
+./install.sh --no-durable-routing # run the proxy container, but don't wire global routing
 ./install.sh --no-caveman         # skip Caveman plugin + omit it from settings
 ./install.sh --sonnet             # use model: sonnet + effortLevel: high
 ./install.sh --check              # validate repo wiring only
 ```
 
-`--no-durable-routing` is the safer alternative to skipping Headroom entirely: it keeps Headroom (and lean-ctx) installed but leaves API-layer compression as an explicit `headroom wrap claude -- <claude args>` launch choice instead of wiring durable proxy routing into your config.
+`--no-durable-routing` is the safer alternative to skipping Headroom entirely: the proxy container still runs, but nothing is written into your global config — you opt into API-layer compression per session by launching `ANTHROPIC_BASE_URL=http://127.0.0.1:8787 claude` instead of having the base URL wired into `settings.json`.
 
 ### Existing setup? Don't worry
 
@@ -88,7 +90,7 @@ Subagent definitions are private by design. The commands can call local agents f
 ## Hook map
 
 ```
-durable routing         claude → Headroom proxy (ANTHROPIC_BASE_URL in settings.json)
+durable routing         claude → Headroom proxy container (ANTHROPIC_BASE_URL in settings.json + headroom MCP at http://127.0.0.1:8787/mcp)
 PreToolUse(Bash)        context-mode + bash-ban-raw-tools + flutter-ctx-redirect + lean-ctx
 PreToolUse(Grep|...)    cbm-code-discovery-gate
 PostToolUse             context-mode + cbm-mcp-marker
