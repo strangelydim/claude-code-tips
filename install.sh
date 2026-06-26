@@ -296,7 +296,13 @@ if [[ -n "$CBM_OS" && -n "$CBM_ARCH" ]]; then
     if [[ -f "$CBM_TMP/codebase-memory-mcp" ]]; then
       mv "$CBM_TMP/codebase-memory-mcp" "$HOME/.local/bin/codebase-memory-mcp"
       chmod +x "$HOME/.local/bin/codebase-memory-mcp"
-      "$HOME/.local/bin/codebase-memory-mcp" setup claude-code 2>/dev/null || true
+      # Register CBM (MCP server + CBM's own hooks) non-interactively. The current
+      # CLI uses `install -y`; the old `setup claude-code` no longer exists, and an
+      # UNRECOGNIZED subcommand makes the binary fall through to "run MCP server on
+      # stdio" — which blocks reading the terminal's stdin and hangs the installer.
+      # `</dev/null` is extra insurance against any prompt. (On a CBM index-format
+      # change, `-y` auto-confirms rebuilding existing indexes.)
+      "$HOME/.local/bin/codebase-memory-mcp" install -y </dev/null >/dev/null 2>&1 || true
       echo "  ✓ CBM installed at ~/.local/bin/codebase-memory-mcp"
     else
       echo "  ⚠ CBM tarball extracted but binary not found — open an issue at the repo"
