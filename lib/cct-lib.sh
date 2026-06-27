@@ -321,6 +321,19 @@ _cct_migrate_v3() {  # v2 -> v3: retire host Headroom (pipx + launchd) for the D
   # The old `headroom init --global claude` injected self-healing ensure-hooks
   # into settings.json; the Docker proxy needs none, so strip them.
   cct_acc_sig "$CCT_HEADROOM_HOOK_CMD_SIG"; cct_flush_hooks
+  # The legacy host integration also shipped as a Claude Code plugin
+  # (headroom@headroom-marketplace from chopratejas/headroom) whose SessionStart
+  # hook shells out to the host `headroom` binary. Docker-only removes that
+  # binary, so the hook fails at startup with "headroom: command not found".
+  # Retire the plugin + its marketplace. Prefer the claude CLI (also cleans the
+  # plugin cache + hooks); fall back to settings.json edits.
+  if [ "${CCT_DRY_RUN:-0}" != 1 ] && command -v claude >/dev/null 2>&1; then
+    claude plugin uninstall headroom@headroom-marketplace >/dev/null 2>&1 || true
+    claude plugin marketplace remove headroom-marketplace >/dev/null 2>&1 || true
+  fi
+  _cct_jq_inplace "$CCT_SETTINGS" 'del(.enabledPlugins["headroom@headroom-marketplace"])' >/dev/null 2>&1 || true
+  _cct_jq_inplace "$CCT_SETTINGS" 'del(.extraKnownMarketplaces["headroom-marketplace"])' >/dev/null 2>&1 || true
+  _cct_removed "legacy headroom Claude Code plugin + marketplace (if present)"
   return 0
 }
 _cct_migrate_v2() {  # v1 -> v2: rtk -> lean-ctx, shell wrapper -> durable routing, handoff retired
