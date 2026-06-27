@@ -2,7 +2,7 @@
 
 > **Fork note.** This is a fork of [sgaabdu4/claude-code-tips](https://github.com/sgaabdu4/claude-code-tips) with a few different defaults:
 > - Uses **[lean-ctx](https://github.com/yvgude/lean-ctx)** instead of RTK for CLI compression — both as Headroom's context tool and as the command-rewriting PreToolUse hook.
-> - Runs **Headroom as a Docker container** (`ghcr.io/chopratejas/headroom:latest`) — no host Python — and sets up **durable routing** (provider base URL written into `settings.json` + the container's MCP tools registered over HTTP) instead of a shell-function wrapper, so `claude` routes through the proxy no matter how it's launched (terminal, desktop app, IDE).
+> - Runs **Headroom as a Docker container** (`ghcr.io/chopratejas/headroom:latest`) — no host Python — and sets up **durable routing** (provider base URL written into `settings.json`) instead of a shell-function wrapper, so `claude` routes through the proxy no matter how it's launched (terminal, desktop app, IDE). The proxy's auto-compression is the main payload; if the image also serves the MCP tools (`compress`/`retrieve`/`stats`) at `/mcp`, the installer detects that and registers them too.
 > - Does **not** use Caveman — install with `./install.sh --no-caveman`.
 >
 > The long-form post in [`claude-code-tips.md`](./claude-code-tips.md) still describes the original RTK-based stack.
@@ -24,7 +24,7 @@ cd claude-code-tips && chmod +x install.sh && ./install.sh --no-caveman
 
 **Prerequisite:** [Docker](https://www.docker.com/products/docker-desktop/) — Headroom runs as a container, so the stack has no host-Python dependency. Make sure Docker Desktop starts at login; the proxy container runs with `--restart unless-stopped`, so the Docker daemon brings it back automatically. If Docker isn't running, install.sh skips Headroom (everything else still installs) and you re-run once Docker is up.
 
-Sanity-checks `git`/`curl`/`jq` upfront. Pulls and runs the Headroom proxy container (`ghcr.io/chopratejas/headroom:latest`, published on `127.0.0.1:8787`, state persisted in a `headroom-workspace` volume), plus lean-ctx, the CBM binary, context-mode (and Caveman unless `--no-caveman`) plugins via `claude plugin install`, hooks, slash commands, statusline, settings, and durable Headroom routing (provider base URL in `settings.json` + the container's compress/retrieve/stats MCP tools registered over HTTP at `/mcp`). **Idempotent** — re-run anytime; an already-current, healthy proxy is left as-is.
+Sanity-checks `git`/`curl`/`jq` upfront. Pulls and runs the Headroom proxy container (`ghcr.io/chopratejas/headroom:latest`, published on `127.0.0.1:8787`, state persisted in a `headroom-workspace` volume), plus lean-ctx, the CBM binary, context-mode (and Caveman unless `--no-caveman`) plugins via `claude plugin install`, hooks, slash commands, statusline, settings, and durable Headroom routing (provider base URL in `settings.json`; the container's compress/retrieve/stats MCP tools are registered over HTTP at `/mcp` **only if this image version serves them** — the installer probes `/mcp` first and skips a dead registration on older images that don't). **Idempotent** — re-run anytime; an already-current, healthy proxy is left as-is.
 
 ### Power-user flags
 
@@ -90,7 +90,7 @@ Subagent definitions are private by design. The commands can call local agents f
 ## Hook map
 
 ```
-durable routing         claude → Headroom proxy container (ANTHROPIC_BASE_URL in settings.json + headroom MCP at http://127.0.0.1:8787/mcp)
+durable routing         claude → Headroom proxy container (ANTHROPIC_BASE_URL in settings.json; + headroom MCP at /mcp if the image serves it)
 PreToolUse(Bash)        context-mode + bash-ban-raw-tools + flutter-ctx-redirect + lean-ctx
 PreToolUse(Grep|...)    cbm-code-discovery-gate
 PostToolUse             context-mode + cbm-mcp-marker

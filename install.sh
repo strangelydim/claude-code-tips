@@ -639,21 +639,38 @@ case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) export PATH="$HOME/.local/bin:$P
       fi
     fi
 
-    # MCP: the proxy auto-exposes compress/retrieve/stats at /mcp over HTTP.
-    # Register it as a user-scope remote server (idempotent: drop any prior entry
-    # first, since `claude mcp add` errors on a duplicate name).
+    # MCP: newer Headroom proxies auto-expose compress/retrieve/stats at /mcp,
+    # but older image tags (the current `:latest` is app-version 0.27.0) don't —
+    # they forward unknown paths upstream, which 404s. Registering then would
+    # leave a DEAD MCP server in Claude Code. So probe /mcp with a real MCP
+    # `initialize` and only register on a 2xx; otherwise drop any stale entry.
+    # This auto-enables the tools the day a newer image actually serves /mcp.
+    DURABLE_INSTALLED="container routing (settings.json env)"
+    mcp_code="$(curl -s -o /dev/null -w '%{http_code}' \
+      -X POST "http://127.0.0.1:${CCT_HEADROOM_PORT}/mcp" \
+      -H 'Content-Type: application/json' \
+      -H 'Accept: application/json, text/event-stream' \
+      -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"cct","version":"0"}}}' \
+      2>/dev/null || echo 000)"
     if command -v claude >/dev/null 2>&1; then
-      claude mcp remove headroom >/dev/null 2>&1 || true
-      if claude mcp add --transport http --scope user \
-           headroom "http://127.0.0.1:${CCT_HEADROOM_PORT}/mcp" >/dev/null 2>&1; then
-        echo "  ✓ Registered Headroom MCP (compress/retrieve/stats) at /mcp"
+      if [[ "$mcp_code" =~ ^2 ]]; then
+        claude mcp remove headroom >/dev/null 2>&1 || true   # idempotent: add errors on dup
+        if claude mcp add --transport http --scope user \
+             headroom "http://127.0.0.1:${CCT_HEADROOM_PORT}/mcp" >/dev/null 2>&1; then
+          echo "  ✓ Registered Headroom MCP (compress/retrieve/stats) at /mcp"
+          DURABLE_INSTALLED="$DURABLE_INSTALLED + remote MCP at /mcp"
+        else
+          echo "  ⚠ 'claude mcp add' failed — register manually:"
+          echo "      claude mcp add --transport http --scope user headroom http://127.0.0.1:${CCT_HEADROOM_PORT}/mcp"
+        fi
       else
-        echo "  ⚠ 'claude mcp add' failed — register manually:"
-        echo "      claude mcp add --transport http --scope user headroom http://127.0.0.1:${CCT_HEADROOM_PORT}/mcp"
+        # Don't leave a dead server behind from a prior run / older image.
+        claude mcp remove headroom >/dev/null 2>&1 || true
+        echo "  · /mcp not served by this image (HTTP $mcp_code) — skipping MCP registration."
+        echo "    Compression proxy is active regardless; MCP auto-enables once the image serves /mcp."
       fi
     fi
 
-    DURABLE_INSTALLED="container routing (settings.json env) + remote MCP at /mcp"
     echo "  ✓ Durable routing configured (restart Claude Code to activate)"
   else
     echo "  ⚠ Proxy isn't healthy — skipped routing + MCP wiring. Once the container is up"
