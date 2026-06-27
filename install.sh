@@ -639,35 +639,48 @@ case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) export PATH="$HOME/.local/bin:$P
       fi
     fi
 
-    # MCP: newer Headroom proxies auto-expose compress/retrieve/stats at /mcp,
-    # but older image tags (the current `:latest` is app-version 0.27.0) don't —
-    # they forward unknown paths upstream, which 404s. Registering then would
-    # leave a DEAD MCP server in Claude Code. So probe /mcp with a real MCP
-    # `initialize` and only register on a 2xx; otherwise drop any stale entry.
-    # This auto-enables the tools the day a newer image actually serves /mcp.
+    # MCP: expose the container's compress/retrieve/stats tools to Claude Code.
+    # Two transports, in preference order — both host-Python-free:
+    #   1) HTTP /mcp — only if a release mounts it on the proxy port (one shared
+    #      server, no per-session process). Probed with a real MCP `initialize`;
+    #      the current release (0.27.0) does NOT serve it (404, forwarded upstream).
+    #   2) stdio via `docker exec` — the path that works today: `headroom mcp serve`
+    #      runs inside the proxy container over stdio and reaches the proxy at
+    #      127.0.0.1:8787; Claude Code spawns one short-lived `docker exec` per
+    #      session. Needs the `mcp` extra, which the proxy image already bundles
+    #      (the `proxy` extra includes mcp>=1.0.0).
+    # Drop any stale entry first either way (claude mcp add errors on a duplicate).
     DURABLE_INSTALLED="container routing (settings.json env)"
-    mcp_code="$(curl -s -o /dev/null -w '%{http_code}' \
+    mcp_http_code="$(curl -s -o /dev/null -w '%{http_code}' \
       -X POST "http://127.0.0.1:${CCT_HEADROOM_PORT}/mcp" \
       -H 'Content-Type: application/json' \
       -H 'Accept: application/json, text/event-stream' \
       -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"cct","version":"0"}}}' \
       2>/dev/null || echo 000)"
     if command -v claude >/dev/null 2>&1; then
-      if [[ "$mcp_code" =~ ^2 ]]; then
-        claude mcp remove headroom >/dev/null 2>&1 || true   # idempotent: add errors on dup
+      claude mcp remove headroom >/dev/null 2>&1 || true
+      if [[ "$mcp_http_code" =~ ^2 ]]; then
         if claude mcp add --transport http --scope user \
              headroom "http://127.0.0.1:${CCT_HEADROOM_PORT}/mcp" >/dev/null 2>&1; then
-          echo "  ✓ Registered Headroom MCP (compress/retrieve/stats) at /mcp"
-          DURABLE_INSTALLED="$DURABLE_INSTALLED + remote MCP at /mcp"
+          echo "  ✓ Registered Headroom MCP (compress/retrieve/stats) over HTTP at /mcp"
+          DURABLE_INSTALLED="$DURABLE_INSTALLED + MCP (HTTP /mcp)"
         else
-          echo "  ⚠ 'claude mcp add' failed — register manually:"
+          echo "  ⚠ 'claude mcp add' (HTTP) failed — register manually:"
           echo "      claude mcp add --transport http --scope user headroom http://127.0.0.1:${CCT_HEADROOM_PORT}/mcp"
         fi
+      elif command -v docker >/dev/null 2>&1 \
+           && docker exec "$CCT_HEADROOM_CONTAINER" headroom mcp serve --help >/dev/null 2>&1; then
+        if claude mcp add --scope user headroom -- \
+             docker exec -i "$CCT_HEADROOM_CONTAINER" headroom mcp serve >/dev/null 2>&1; then
+          echo "  ✓ Registered Headroom MCP (compress/retrieve/stats) via 'docker exec' stdio"
+          DURABLE_INSTALLED="$DURABLE_INSTALLED + MCP (docker-exec stdio)"
+        else
+          echo "  ⚠ 'claude mcp add' (stdio) failed — register manually:"
+          echo "      claude mcp add --scope user headroom -- docker exec -i $CCT_HEADROOM_CONTAINER headroom mcp serve"
+        fi
       else
-        # Don't leave a dead server behind from a prior run / older image.
-        claude mcp remove headroom >/dev/null 2>&1 || true
-        echo "  · /mcp not served by this image (HTTP $mcp_code) — skipping MCP registration."
-        echo "    Compression proxy is active regardless; MCP auto-enables once the image serves /mcp."
+        echo "  · Container can't serve MCP (no 'headroom mcp serve') — skipping MCP registration."
+        echo "    Compression proxy is active regardless."
       fi
     fi
 
